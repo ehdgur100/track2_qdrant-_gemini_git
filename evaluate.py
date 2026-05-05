@@ -182,7 +182,7 @@ class FTCOfficialEvaluator:
                 "latency": total_item_time
             })
             
-            # [Debug Log] Collect for file output
+            # [Debug Log] Collect for file output (모든 점수 지표 포함)
             debug_logs.append({
                 "no": i + 1,
                 "question": query,
@@ -193,6 +193,9 @@ class FTCOfficialEvaluator:
                 "gen_answer": gen_answer,
                 "gt_answer": gt_answer,
                 "recall_5": recall_5,
+                "mrr": mrr,
+                "bert_sim": bert_sim,
+                "f1": f1,
                 "final_score": final_score,
                 "latency": total_item_time
             })
@@ -241,10 +244,10 @@ class FTCOfficialEvaluator:
             f.write(f"| BERTScore (Sim) | 30% | {summary['bert_sim']:.4f} |\n")
             f.write(f"| F1 Score | 20% | {summary['f1']:.4f} |\n\n")
 
-            f.write("### [3] 검색 방식별 비교 (Original vs HyDE)\n")
-            f.write("| 방식 | 평균 Recall@5 | 평균 검색 시간 |\n| :--- | :---: | :---: |\n")
-            f.write(f"| Original | **{summary['recall_orig']*100:.2f}%** | {summary['lat_orig']:.2f}s |\n")
-            f.write(f"| HyDE | **{summary['recall_hyde']*100:.2f}%** | {summary['lat_hyde']:.2f}s |\n\n")
+            # [3] 검색 성능 진단
+            f.write("### [3] 검색 성능 진단\n")
+            f.write(f"- **최종 Recall@5**: **{summary['recall_5']*100:.2f}%**\n")
+            f.write(f"- **평균 검색 시간**: {summary['lat_ret']:.2f}s\n\n")
 
         # 2. Detailed Debug Log (전수 조사용)
         with open("evaluation_debug_log.md", "w", encoding="utf-8") as f:
@@ -283,7 +286,7 @@ class FTCOfficialEvaluator:
 
                 f.write(f"- **생성된 답변 (AI)**: {log['gen_answer']}\n")
                 f.write(f"- **실제 정답 (GT)**: {log['gt_answer']}\n")
-                f.write(f"- **점수**: Recall@5={log['recall_5']}, MRR={log['mrr']:.4f}, BERTSim={log['bert_sim']:.4f}, Final={log['final_score']:.4f}\n")
+                f.write(f"- **점수**: Recall@5={log.get('recall_5', 0)}, MRR={log.get('mrr', 0):.4f}, BERTSim={log.get('bert_sim', 0):.4f}, Final={log.get('final_score', 0):.4f}\n")
 
         print("\n" + "="*60)
         print(f"🏁 EVALUATION SUCCESSFUL | FINAL SCORE: {summary['final_score']*100:.2f}")

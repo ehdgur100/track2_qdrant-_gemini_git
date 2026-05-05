@@ -23,15 +23,16 @@ class FTCRetriever:
         self.client = QdrantClient(path=Config.DB_PATH)
         self.collection_name = "ftc_chunks_native"
         
-        # 임베딩 모델 (기본 디바이스 할당)
+        # 임베딩 모델 (Dense만 사용)
         self.dense_model = TextEmbedding(model_name=Config.EMBED_MODEL_ID)
-        self.sparse_model = SparseTextEmbedding(model_name=Config.SPARSE_MODEL_ID)
+        if Config.USE_SPARSE:
+            self.sparse_model = SparseTextEmbedding(model_name=Config.SPARSE_MODEL_ID)
         
         # 리랭커 로드
         self.rerank_model = CrossEncoder(
             Config.RERANK_MODEL_ID, 
             device=Config.DEVICE,
-            local_files_only=True
+            local_files_only=False
         )
         
         # 2. 사건명 목록 캐싱 (필터링용)
@@ -57,8 +58,9 @@ class FTCRetriever:
                 if next_page_offset is None:
                     break
             
-            self.all_case_titles = list(self.all_case_titles)
-            logger.info(f"🏷️ [Retriever] {len(self.all_case_titles)}개의 사건명 로드 완료 (500개 전수 확인 완료)")
+            # [개선] 더 구체적인 사건명(긴 이름)부터 매칭되도록 길이순 정렬
+            self.all_case_titles = sorted(list(self.all_case_titles), key=len, reverse=True)
+            logger.info(f"🏷️ [Retriever] {len(self.all_case_titles)}개의 사건명 로드 및 정렬 완료")
         except Exception as e:
             logger.error(f"❌ [Retriever] 사건명 로드 실패: {e}")
             self.all_case_titles = []
@@ -100,36 +102,53 @@ class FTCRetriever:
         # 2. Hybrid Search (Dense + Sparse)
         # FastEmbed를 사용해 쿼리 벡터 생성
         query_dense = list(self.dense_model.embed([search_query]))[0].tolist()
-        query_sparse_res = list(self.sparse_model.embed([search_query]))[0]
-        query_sparse = models.SparseVector(
-            indices=query_sparse_res.indices.tolist(),
-            values=query_sparse_res.values.tolist()
-        )
-
         try:
-            # Qdrant v1.10+의 최신 기능을 사용해 하이브리드 검색 수행 (RRF 병합)
-            response = self.client.query_points(
-                collection_name=self.collection_name,
-                prefetch=[
-                    models.Prefetch(query=query_dense, using="dense", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
-                    models.Prefetch(query=query_sparse, using="sparse", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
-                ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=Config.RETRIEVAL_TOP_K
-            )
-            
-            # [안전장치] 필터를 적용했는데 결과가 너무 적으면 필터 없이 재검색
-            if len(response.points) < 5 and qdrant_filter is not None:
-                logger.warning(f"⚠️ [Retriever] 필터 결과 부족({len(response.points)}개). 필터 없이 재검색 수행.")
+            if Config.USE_SPARSE:
+                # 하이브리드 검색 (Dense + Sparse)
+                query_sparse_res = list(self.sparse_model.embed([search_query]))[0]
+                query_sparse = models.SparseVector(
+                    indices=query_sparse_res.indices.tolist(),
+                    values=query_sparse_res.values.tolist()
+                )
                 response = self.client.query_points(
                     collection_name=self.collection_name,
                     prefetch=[
-                        models.Prefetch(query=query_dense, using="dense", limit=Config.RETRIEVAL_TOP_K),
-                        models.Prefetch(query=query_sparse, using="sparse", limit=Config.RETRIEVAL_TOP_K),
+                        models.Prefetch(query=query_dense, using="dense", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
+                        models.Prefetch(query=query_sparse, using="sparse", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
                     ],
                     query=models.FusionQuery(fusion=models.Fusion.RRF),
                     limit=Config.RETRIEVAL_TOP_K
                 )
+            else:
+                # Dense 단독 검색 (가장 추천되는 고성능 방식)
+                response = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_dense,
+                    using="dense",
+                    query_filter=qdrant_filter,
+                    limit=Config.RETRIEVAL_TOP_K
+                )
+            
+            # [안전장치] 필터를 적용했는데 결과가 너무 적으면 필터 없이 재검색
+            if len(response.points) < 5 and qdrant_filter is not None:
+                logger.warning(f"⚠️ [Retriever] 필터 결과 부족({len(response.points)}개). 필터 없이 재검색 수행.")
+                if Config.USE_SPARSE:
+                    response = self.client.query_points(
+                        collection_name=self.collection_name,
+                        prefetch=[
+                            models.Prefetch(query=query_dense, using="dense", limit=Config.RETRIEVAL_TOP_K),
+                            models.Prefetch(query=query_sparse, using="sparse", limit=Config.RETRIEVAL_TOP_K),
+                        ],
+                        query=models.FusionQuery(fusion=models.Fusion.RRF),
+                        limit=Config.RETRIEVAL_TOP_K
+                    )
+                else:
+                    response = self.client.query_points(
+                        collection_name=self.collection_name,
+                        query=query_dense,
+                        using="dense",
+                        limit=Config.RETRIEVAL_TOP_K
+                    )
 
             candidates = [
                 {

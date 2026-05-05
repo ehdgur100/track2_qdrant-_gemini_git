@@ -14,7 +14,7 @@ class Config:
     
     # [모델 설정]
     MODEL_ID = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
-    RERANK_MODEL_ID = "BAAI/bge-reranker-v2-m3"
+    RERANK_MODEL_ID = "Dongjin-kr/ko-reranker"
     EMBED_MODEL_ID = "intfloat/multilingual-e5-large"
     SPARSE_MODEL_ID = "prithivida/Splade_PP_en_v1"
 
@@ -29,12 +29,13 @@ class Config:
     RETRIEVAL_TOP_K = 250   # 1차 검색 후보군 확대 (정확도 향상)
     RERANK_TOP_K = 5        # 공모전 필수 규칙: 반드시 정확히 5개 반환해야 함
     USE_HYDE = False 
+    USE_SPARSE = False      # 영어 Sparse(Splade)가 성능을 저하시키므로 비활성화
     
     # RRF (Reciprocal Rank Fusion) 가중치
     RRF_K = 60 # 순위 기반 병합 시의 상수값
     
     # [생성 파라미터]
-    MAX_NEW_TOKENS = 200   # 30초 타임아웃 방지를 위해 최적화
+    MAX_NEW_TOKENS = 120   # 30초 타임아웃 방지를 위해 최적화 (BF16 환경)
     TEMPERATURE = 0.0      # 가이드 권장사항: 일관성을 위해 0.0(Greedy Search) 설정
     TOP_P = 0.9
 
