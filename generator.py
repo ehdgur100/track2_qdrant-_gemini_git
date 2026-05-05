@@ -10,6 +10,11 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+# 외부 라이브러리 로그 억제
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 class FTCGenerator:
     """
     EXAONE-3.5 모델을 사용하여 의결서 기반 답변을 생성하는 엔진.

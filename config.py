@@ -26,7 +26,7 @@ class Config:
     TORCH_DTYPE = torch.bfloat16 
 
     # [검색 정확도 파라미터]
-    RETRIEVAL_TOP_K = 250   # 1차 검색 후보군 확대 (정확도 향상)
+    RETRIEVAL_TOP_K = 250   # 1차 검색 후보군 (기존 검증 수치 복구)
     RERANK_TOP_K = 5        # 공모전 필수 규칙: 반드시 정확히 5개 반환해야 함
     USE_HYDE = False 
     USE_SPARSE = False      # 영어 Sparse(Splade)가 성능을 저하시키므로 비활성화
@@ -38,4 +38,5 @@ class Config:
     MAX_NEW_TOKENS = 120   # 30초 타임아웃 방지를 위해 최적화 (BF16 환경)
     TEMPERATURE = 0.0      # 가이드 권장사항: 일관성을 위해 0.0(Greedy Search) 설정
     TOP_P = 0.9
-
+    # [로깅 설정]
+    LOG_LEVEL = "INFO"

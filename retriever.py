@@ -11,6 +11,11 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
+# 외부 라이브러리 로그 억제 (Hugging Face 서버 연결 로그 등)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 class FTCRetriever:
     """
     Qdrant 네이티브 하이브리드 검색 엔진.
@@ -28,11 +33,10 @@ class FTCRetriever:
         if Config.USE_SPARSE:
             self.sparse_model = SparseTextEmbedding(model_name=Config.SPARSE_MODEL_ID)
         
-        # 리랭커 로드
         self.rerank_model = CrossEncoder(
             Config.RERANK_MODEL_ID, 
             device=Config.DEVICE,
-            local_files_only=False
+            local_files_only=True # 서버 연결 방지 (로컬 캐시 우선)
         )
         
         # 2. 사건명 목록 캐싱 (필터링용)
@@ -74,21 +78,24 @@ class FTCRetriever:
             pass
 
     def _get_normalized_case(self, text: str) -> str:
-        """사건명 비교를 위한 정규화"""
+        """사건명 비교를 위한 기본 정규화 (동의어 처리 제거)"""
         if not text: return ""
+        # (주), (사) 제거 및 공백 제거, 대문자 변환만 수행
         text = re.sub(r'\(주\)|\(사\)', '', text)
-        return re.sub(r'\s+', '', text).strip()
+        text = re.sub(r'\s+', '', text).strip().upper()
+        return text
 
     def retrieve(self, question: str, hyde_query: str = None) -> Dict[str, Any]:
-        """Qdrant 네이티브 하이브리드 검색 수행"""
+        """Qdrant 투트랙 검색 수행"""
         search_query = hyde_query if hyde_query else question
         
-        # 1. 사건명 감지 (Filtering)
+        # 1. 사건명 감지 (Filtering) - 질문에 사건명이 포함된 경우만 정밀 매칭
         detected_case = None
         norm_question = self._get_normalized_case(question)
         for title in self.all_case_titles:
             norm_title = self._get_normalized_case(title)
-            if norm_title and (norm_title in norm_question or norm_question in norm_title):
+            # [수정] 오탐지 방지: 질문에 정규화된 사건명이 명시적으로 포함되어야 함
+            if norm_title and norm_title in norm_question:
                 detected_case = title
                 break
         
@@ -97,72 +104,34 @@ class FTCRetriever:
             qdrant_filter = models.Filter(
                 must=[models.FieldCondition(key="case_title", match=models.MatchValue(value=detected_case))]
             )
-            logger.info(f"🎯 [Retriever] 사건명 필터 적용: {detected_case}")
+            logger.info(f"🎯 [Retriever] 하드 필터링 적용: {detected_case}")
 
-        # 2. Hybrid Search (Dense + Sparse)
-        # FastEmbed를 사용해 쿼리 벡터 생성
+        # 2. [개선] 단일 트랙 하드 필터링 검색
+        # 사건이 감지되면 해당 사건만 집중 검색, 아니면 전체 검색 (후보군 오염 방지)
         query_dense = list(self.dense_model.embed([search_query]))[0].tolist()
+        
         try:
-            if Config.USE_SPARSE:
-                # 하이브리드 검색 (Dense + Sparse)
-                query_sparse_res = list(self.sparse_model.embed([search_query]))[0]
-                query_sparse = models.SparseVector(
-                    indices=query_sparse_res.indices.tolist(),
-                    values=query_sparse_res.values.tolist()
-                )
-                response = self.client.query_points(
-                    collection_name=self.collection_name,
-                    prefetch=[
-                        models.Prefetch(query=query_dense, using="dense", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
-                        models.Prefetch(query=query_sparse, using="sparse", filter=qdrant_filter, limit=Config.RETRIEVAL_TOP_K),
-                    ],
-                    query=models.FusionQuery(fusion=models.Fusion.RRF),
-                    limit=Config.RETRIEVAL_TOP_K
-                )
-            else:
-                # Dense 단독 검색 (가장 추천되는 고성능 방식)
-                response = self.client.query_points(
-                    collection_name=self.collection_name,
-                    query=query_dense,
-                    using="dense",
-                    query_filter=qdrant_filter,
-                    limit=Config.RETRIEVAL_TOP_K
-                )
+            res = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_dense,
+                using="dense",
+                query_filter=qdrant_filter, # 사건 감지 시 필터 적용, 미감지 시 None
+                limit=Config.RETRIEVAL_TOP_K
+            )
             
-            # [안전장치] 필터를 적용했는데 결과가 너무 적으면 필터 없이 재검색
-            if len(response.points) < 5 and qdrant_filter is not None:
-                logger.warning(f"⚠️ [Retriever] 필터 결과 부족({len(response.points)}개). 필터 없이 재검색 수행.")
-                if Config.USE_SPARSE:
-                    response = self.client.query_points(
-                        collection_name=self.collection_name,
-                        prefetch=[
-                            models.Prefetch(query=query_dense, using="dense", limit=Config.RETRIEVAL_TOP_K),
-                            models.Prefetch(query=query_sparse, using="sparse", limit=Config.RETRIEVAL_TOP_K),
-                        ],
-                        query=models.FusionQuery(fusion=models.Fusion.RRF),
-                        limit=Config.RETRIEVAL_TOP_K
-                    )
-                else:
-                    response = self.client.query_points(
-                        collection_name=self.collection_name,
-                        query=query_dense,
-                        using="dense",
-                        limit=Config.RETRIEVAL_TOP_K
-                    )
-
             candidates = [
                 {
-                    "id": p.payload["id"],
-                    "text": p.payload["text"],
-                    "case_title": p.payload["case_title"],
-                    "header": p.payload["header"],
-                    "enriched_text": p.payload.get("enriched_text", p.payload["text"]),
-                "chunk_id": p.payload.get("chunk_id", "")
-            }
-            for p in response.points
-        ]
+                    "id": p.payload.get("id"),
+                    "text": p.payload.get("text", ""),
+                    "case_title": p.payload.get("case_title", ""),
+                    "header": p.payload.get("header", ""),
+                    "enriched_text": p.payload.get("enriched_text", p.payload.get("text", "")),
+                    "chunk_id": p.payload.get("chunk_id", "")
+                }
+                for p in res.points
+            ]
         except Exception as e:
-            logger.error(f"❌ [Retriever] 하이브리드 검색 실패: {e}")
+            logger.error(f"❌ [Retriever] 검색 실패: {e}")
             return {
                 "final_chunks": [], 
                 "diagnostics": {
@@ -194,22 +163,50 @@ class FTCRetriever:
         )
         torch.cuda.empty_cache()
         
+        # 4. Final Scoring with Heuristics
         for i, score in enumerate(rerank_scores):
             cand = candidates[i]
             final_score = float(score)
+            text = cand.get("text", "")
+            header = cand.get("header", "")
             
-            # [도메인 최적화 1] 사건명 일치 보너스 (+1.0)
+            # [1] 사건명 일치 보너스 (가장 강력함 - 복구!)
             if detected_case and detected_case in cand["case_title"]:
                 final_score += 1.0
             
-            # [도메인 최적화 2] 핵심 섹션 보너스 (+0.2)
-            # 너무 높으면(예: 1.5) 다른 사건의 주문이 섞여 들어오는 부작용(환각)이 발생함
-            header = cand.get("header", "")
-            if any(h in header for h in ["주 문", "주문", "결 론", "결론"]):
-                final_score += 0.2
+            # [2] 키워드 매칭 보너스 (Sparse 검색 보완)
+            query_words = set([w for w in re.findall(r'\w+', question) if len(w) >= 2])
+            text_words = set(re.findall(r'\w+', text))
+            overlap_count = len(query_words & text_words)
+            final_score += min(overlap_count * 0.05, 0.5)
 
-            # [도메인 최적화 3] 초반부 청크 타이브레이커 (+0.3)
-            chunk_id = cand.get("id", "") # payload의 'id' 사용
+            # [3] 법률 도메인 특화 보너스
+            # 3-1. 법 조항 매칭
+            law_articles = re.findall(r'제\d+조', question)
+            for article in law_articles:
+                if article in text:
+                    final_score += 0.5
+
+            # 3-2. 과징금/금액 관련 질문 방어
+            if any(q in question for q in ["과징금", "금액", "얼마", "납부"]):
+                if any(h in header for h in ["주 문", "주문", "결 론", "결론", "과징금"]):
+                    final_score += 0.3
+                if re.search(r'\d+(?:,\d+)*\s*원', text):
+                    final_score += 0.2
+
+            # 3-3. 날짜/기간 관련 질문 방어
+            if any(q in question for q in ["언제", "기간", "일자", "날짜", "년", "월", "일"]):
+                if re.search(r'\d{4}[\.년]\s*\d{1,2}[\.월]', text):
+                    final_score += 0.2
+
+            # 3-4. 위반 행위/사실 확인 관련 질문 방어
+            if any(q in question for q in ["위반", "내용", "사실", "행위", "사유", "근거"]):
+                target_headers = ["사실의 확인", "사실의확인", "위반행위", "위반 행위", "행위사실", "행위 사실", "위법성 판단", "사실의 인정"]
+                if any(h in header for h in target_headers):
+                    final_score += 0.2
+
+            # [4] 초반부 청크 보너스 (주문 및 이유 초입)
+            chunk_id = cand.get("id", "")
             try:
                 chunk_num = int(chunk_id.split('-CH-')[-1]) if '-CH-' in chunk_id else 999
                 if chunk_num <= 5:
@@ -234,9 +231,9 @@ class FTCRetriever:
             if len(final_chunks) >= Config.RERANK_TOP_K:
                 break
         
-        # [안전장치] 만약 5개가 안 될 경우 (거의 없겠지만) candidates 전체에서 보충
+        # [안전장치 1] candidates 안에서 최대한 보충
         if len(final_chunks) < Config.RERANK_TOP_K:
-            logger.warning(f"⚠️ [Retriever] 결과 부족({len(final_chunks)}개). 보충 시도.")
+            logger.warning(f"⚠️ [Retriever] 결과 부족({len(final_chunks)}개). candidates 내부에서 보충 시도.")
             for cand in candidates:
                 c_id = cand.get("id")
                 if c_id not in seen_ids:
@@ -246,6 +243,36 @@ class FTCRetriever:
                     break
 
         top_results = final_chunks[:Config.RERANK_TOP_K]
+
+        # ==============================================================
+        # 🚨[안전장치 2: 최후의 보루] 그래도 5개가 안 되면 DB에서 강제 추출 (0점 절대 방어)
+        # ==============================================================
+        if len(top_results) < Config.RERANK_TOP_K:
+            logger.critical(f"🆘 [Retriever] 청크가 {len(top_results)}개뿐입니다! 0점 방지를 위해 Qdrant에서 강제로 채웁니다.")
+            try:
+                # 필터 없이 전체 DB에서 아무거나 10개 가져오기
+                fallback_res = self.client.scroll(
+                    collection_name=self.collection_name, 
+                    limit=10, 
+                    with_payload=True, 
+                    with_vectors=False
+                )[0]
+                
+                for f_point in fallback_res:
+                    f_id = f_point.payload.get("id")
+                    if f_id and f_id not in seen_ids:
+                        top_results.append({
+                            "id": f_id,
+                            "text": f_point.payload.get("text", ""),
+                            "header": "",
+                            "case_title": "Fallback",
+                            "final_score": -99.0
+                        })
+                        seen_ids.add(f_id)
+                    if len(top_results) >= Config.RERANK_TOP_K:
+                        break
+            except Exception as e:
+                logger.error(f"Fallback 실패: {e}")
         
         # [로그] 상위 결과 점수 출력 (분석용)
         logger.info(f"🔍 [Retriever] Final Top {len(top_results)} Chunk IDs:")
