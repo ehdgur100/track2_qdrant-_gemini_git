@@ -1,0 +1,17 @@
+qdrant-client
+fastembed
+sentence-transformers
+bitsandbytes
+accelerate
+fastapi
+uvicorn
+pandas
+tqdm
+torch>=2.0.0
+torchvision
+torchaudio
+transformers
+einops
+sentencepiece
+huggingface_hub
+onnxruntime-gpu
