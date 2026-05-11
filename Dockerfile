@@ -1,31 +1,39 @@
-# 1. 베이스 이미지 설정 (CUDA 12.1 및 Python 3.10 포함)
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 
-# 2. 필수 패키지 설치
-RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# 3. 작업 디렉토리 생성
 WORKDIR /app
 
-# 4. 종속성 파일 복사 및 설치
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN conda run pip install --force-reinstall transformers==4.45.2 tokenizers==0.20.3 && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir \
+        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ \
+        -r requirements.txt
 
-# 5. 소스 코드 복사
-COPY . .
+COPY config.py retriever.py generator.py main.py server.py download_models.py ./
 
-# 6. 모델 사전 다운로드 (인터넷 연결 필요)
-# 빌드 시점에 모델을 다운로드하여 이미지 내부에 저장합니다.
-RUN mkdir -p /app/models
-RUN python3 download_models.py
+COPY models/models--LGAI-EXAONE--EXAONE-3.5-7.8B-Instruct /root/.cache/huggingface/hub/models--LGAI-EXAONE--EXAONE-3.5-7.8B-Instruct
+COPY models/models--Dongjin-kr--ko-reranker /root/.cache/huggingface/hub/models--Dongjin-kr--ko-reranker
+COPY models/models--bert-base-multilingual-cased /root/.cache/huggingface/hub/models--bert-base-multilingual-cased
+COPY models/models--BAAI--bge-m3 /root/.cache/huggingface/hub/models--BAAI--bge-m3
 
-# 7. 환경 변수 설정
-ENV PYTHONIOENCODING=utf-8
-ENV FTC_DATA_DIR=/data
-ENV CUDA_VISIBLE_DEVICES=0
+COPY fastembed_cache/ /tmp/fastembed_cache/
 
-# 8. 최종 실행 명령어
-CMD ["python3", "main.py"]
+COPY cache/ /app/cache/
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+ENV FASTEMBED_CACHE_PATH=/tmp/fastembed_cache/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "server:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--timeout-keep-alive", "35"]

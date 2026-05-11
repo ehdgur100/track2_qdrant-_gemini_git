@@ -1,0 +1,19 @@
+# 1. 파이썬 캐시 및 가상환경 (충돌 방지)
+__pycache__/
+venv/
+.venv/
+
+# 2. 로컬 모델 캐시 (도커 안에서 깨끗하게 새로 받기 위함)
+models_cache/
+~/.cache/
+
+# 3. 평가 및 디버그용 파일 (용량 다이어트)
+evaluate.py
+eval_data.json
+evaluation_checkpoint_*.json
+evaluation_report_*.md
+evaluation_debug_log.md
+
+# 4. 전처리용 코드 (이미 DB가 구워졌으므로 불필요)
+data_loader.py
+preprocess.py
