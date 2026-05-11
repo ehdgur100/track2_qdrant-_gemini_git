@@ -27,12 +27,11 @@ class FTCDataLoader:
         # 2. 각주 번호 제거
         text = re.sub(r'\d+\)', '', text)
         
-        # 3. 한자 제거 및 한글 병기 처리
+        # 3. 괄호 안의 한자 제거 (단독 한자는 법률 용어이므로 보존)
         text = re.sub(r'\([\u4e00-\u9fff]+\)', '', text)
-        text = re.sub(r'[\u4e00-\u9fff]', '', text)
         
         # 4. 불필요한 연속 공백 정규화 (줄바꿈은 유지)
-        lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
+        lines =[re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
         
         # 5. 빈 줄이 너무 많은 경우 정리
         text = '\n'.join([line for line in lines if line])
@@ -44,7 +43,7 @@ class FTCDataLoader:
         데이터를 로드하고 검색 및 생성에 최적화된 형태로 보강합니다.
         """
         all_chunks = []
-        files = [f for f in os.listdir(self.data_dir) if f.endswith('.json') and not f.endswith('_metadata.json')]
+        files =[f for f in os.listdir(self.data_dir) if f.endswith('.json') and not f.endswith('_metadata.json')]
         
         logger.info(f"📂 [DataLoader] 총 {len(files)}개의 의결서 파일 분석 시작...")
 

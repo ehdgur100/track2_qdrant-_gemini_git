@@ -1,17 +1,24 @@
-qdrant-client
-fastembed
-sentence-transformers
-bitsandbytes
-accelerate
-fastapi
-uvicorn
+# 1. 엔진 및 핵심 부품 (절대 고정)
+torch==2.2.1
+torchvision==0.17.1
+bitsandbytes==0.42.0
+
+# 2. AI 라이브러리 (삼각관계를 해결한 최적 조합)
+# 🚨 4.45.2와 0.20.3은 EXAONE 3.5의 RopeParameters 에러를 해결하는 단짝입니다.
+transformers==4.45.2
+tokenizers==0.20.3
+sentence-transformers==3.1.1
+accelerate==0.33.0
+
+# 3. 검색 및 서버 (버전 일치 완료)
+# 🚨 fastembed 0.4.1부터 tokenizers 0.20을 정식 지원합니다.
+fastembed==0.4.1
+qdrant-client==1.17.1
+fastapi==0.111.0
+uvicorn==0.29.0
+onnxruntime-gpu==1.17.1
+
+# 4. 유틸리티
 pandas
 tqdm
-torch>=2.0.0
-torchvision
-torchaudio
-transformers
-einops
-sentencepiece
-huggingface_hub
-onnxruntime-gpu
+scikit-learn

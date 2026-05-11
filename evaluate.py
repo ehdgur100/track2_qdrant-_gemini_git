@@ -11,11 +11,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 # --- [안정성] 모든 불필요한 라이브러리 경고 차단 ---
-import warnings
 warnings.filterwarnings("ignore") 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-import logging
 # transformers 로깅 수준을 ERROR로 설정하여 경고 차단
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
@@ -98,12 +96,12 @@ class FTCOfficialEvaluator:
         
         total_count = len(test_data)
         results = []
-        debug_logs = []
+        debug_logs =[]
         logger.info(f"Evaluation started for {total_count} cases. This may take a few minutes...")
 
-        total_item_times = []
+        total_item_times =[]
         retrieval_times = []
-        generation_times = []
+        generation_times =[]
 
         for i, item in enumerate(test_data):
             item_start_time = time.time()
@@ -131,7 +129,7 @@ class FTCOfficialEvaluator:
             # 2. Generation (Using HyDE results as official)
             gen_start = time.time()
             context = "\n\n".join([f"[{c['header']}] {c['text']}" for c in final_chunks])
-            gen_answer = self.generator.generate(query, final_chunks) # generator.py의 메서드명에 맞춤
+            gen_answer = self.generator.generate(query, final_chunks) 
             gen_time = time.time() - gen_start
             
             total_item_time = time.time() - item_start_time
@@ -147,14 +145,13 @@ class FTCOfficialEvaluator:
             
             final_score = (0.35 * recall_5) + (0.15 * mrr) + (0.30 * bert_sim) + (0.20 * f1)
             
-            # [Debug Info] Console Output (공모전 평가 규격에 맞춘 상세 출력)
+            # [Debug Info] Console Output
             latency_status = "✅ PASS" if total_item_time < 30 else "❌ FAIL (0점 처리)"
             
             print(f" ⏱️  [속도 평가]  전체: {total_item_time:.2f}s | 검색: {ret_time:.2f}s | 생성: {gen_time:.2f}s  -> {latency_status}")
             print(f" 🔍 [검색 평가]  Recall@5: {'✅ PASS' if recall_5 > 0 else '❌ FAIL'} | 순위(Rank): {int(1/mrr) if mrr > 0 else 'N/A'}")
             print(f" 🎯 [정답 위치]  ID: {gt_id} | 문서: {gt_doc}")
             
-            # 1차 검색 진단 (데이터 규격 일치 확인 완료)
             pre_match_found = any(c['id'] == gt_id for c in ret_result["diagnostics"]["pre_rerank_candidates"])
             diag_str = "🎯 1차(Hybrid)에서 찾음" if pre_match_found else "❌ 1차에서 놓침"
             print(f" 🛠️  [검색 진단]  {diag_str}")
@@ -171,36 +168,20 @@ class FTCOfficialEvaluator:
 
             total_item_time = time.time() - item_start_time
             results.append({
-                "no": i + 1,
-                "final_score": final_score, 
-                "recall_5": recall_5,
-                "mrr": mrr,
-                "bert_sim": bert_sim,
-                "f1": f1,
-                "lat_ret": ret_time,
-                "lat_gen": gen_time,
-                "latency": total_item_time
+                "no": i + 1, "final_score": final_score, "recall_5": recall_5,
+                "mrr": mrr, "bert_sim": bert_sim, "f1": f1,
+                "lat_ret": ret_time, "lat_gen": gen_time, "latency": total_item_time
             })
             
-            # [Debug Log] Collect for file output (모든 점수 지표 포함)
             debug_logs.append({
-                "no": i + 1,
-                "question": query,
-                "gt_id": gt_id,
-                "gt_doc": gt_doc,
-                "retrieved": [{"id": c['id'], "doc": c.get('case_title', 'N/A')} for c in final_chunks],
-                "pre_rerank": ret_result.get("diagnostics", {}).get("pre_rerank_candidates", []),
-                "gen_answer": gen_answer,
-                "gt_answer": gt_answer,
-                "recall_5": recall_5,
-                "mrr": mrr,
-                "bert_sim": bert_sim,
-                "f1": f1,
-                "final_score": final_score,
-                "latency": total_item_time
+                "no": i + 1, "question": query, "gt_id": gt_id, "gt_doc": gt_doc,
+                "retrieved":[{"id": c['id'], "doc": c.get('case_title', 'N/A')} for c in final_chunks],
+                "pre_rerank": ret_result.get("diagnostics", {}).get("pre_rerank_candidates",[]),
+                "gen_answer": gen_answer, "gt_answer": gt_answer,
+                "recall_5": recall_5, "mrr": mrr, "bert_sim": bert_sim, "f1": f1,
+                "final_score": final_score, "latency": total_item_time
             })
 
-            # [Checkpoint] 매 5문항마다 중간 저장
             if (i + 1) % 5 == 0 or (i + 1) == total_count:
                 checkpoint_path = f"evaluation_checkpoint_{session_time}.json"
                 df_temp = pd.DataFrame(results)
@@ -215,17 +196,13 @@ class FTCOfficialEvaluator:
                 with open(checkpoint_path, "w", encoding="utf-8") as cp_f:
                     json.dump(checkpoint_data, cp_f, ensure_ascii=False, indent=4)
                 logger.info(f"💾 [Checkpoint] {i+1}번째 결과 저장 완료 -> {checkpoint_path}")
-                logger.info(f"   (Avg Recall - Orig: {summary_stats.get('recall_orig', 0)*100:.1f}%, HyDE: {summary_stats.get('recall_hyde', 0)*100:.1f}%)")
 
-        # Reporting
         df = pd.DataFrame(results)
         summary = df.mean().to_dict()
-        kst = timezone(timedelta(hours=9))
         now_kst_obj = datetime.now(kst)
         now_kst = now_kst_obj.strftime('%Y-%m-%d %H:%M:%S')
         time_suffix = now_kst_obj.strftime('%Y%m%d_%H%M')
         
-        # 1. Official Summary Report (파일명에 시간 포함)
         report_path = f"evaluation_report_{time_suffix}.md"
         with open(report_path, "w", encoding="utf-8") as f:
             f.write("# 🏆 공정위 AI 공모전 평가 결과 리포트\n\n")
@@ -244,12 +221,10 @@ class FTCOfficialEvaluator:
             f.write(f"| BERTScore (Sim) | 30% | {summary['bert_sim']:.4f} |\n")
             f.write(f"| F1 Score | 20% | {summary['f1']:.4f} |\n\n")
 
-            # [3] 검색 성능 진단
             f.write("### [3] 검색 성능 진단\n")
             f.write(f"- **최종 Recall@5**: **{summary['recall_5']*100:.2f}%**\n")
             f.write(f"- **평균 검색 시간**: {summary['lat_ret']:.2f}s\n\n")
 
-        # 2. Detailed Debug Log (전수 조사용)
         with open("evaluation_debug_log.md", "w", encoding="utf-8") as f:
             f.write("# 🔍 평가 상세 디버그 로그 (전수 조사용)\n\n")
             f.write("| 번호 | 질문 (일부) | 정답 ID | 결과 | 검색된 ID #1 | 최종점수 |\n")
@@ -262,25 +237,23 @@ class FTCOfficialEvaluator:
             
             f.write("\n\n## 📝 문항별 상세 검색 내역\n")
             for log in debug_logs:
-                f.write(f"\n### [{log['no']}] {log['question']}\n")
+                f.write(f"\n###[{log['no']}] {log['question']}\n")
                 f.write(f"- **정답**: `{log['gt_id']}` (문서: {log['gt_doc']})\n")
                 
-                # 최종 Top 5 (리랭킹 후)
                 f.write("- **최종 검색 결과 (Top 5, After Reranking)**:\n")
                 for j, r in enumerate(log['retrieved']):
                     match = " (MATCH! ✅)" if r['id'] == log['gt_id'] else ""
                     f.write(f"  {j+1}. `{r['id']}` | {r['doc']}{match}\n")
                 
-                # 리랭킹 전 후보군 (Top 20)
                 f.write("- **리랭킹 전 후보군 (Top 20, Hybrid Search Only)**:\n")
                 pre_match = False
                 for j, r in enumerate(log['pre_rerank']):
                     match = " (FOUND HERE! 🎯)" if r['id'] == log['gt_id'] else ""
                     if match: pre_match = True
-                    f.write(f"  {j+1}. `{r['id']}` | {r['case_title']}{match}\n")
+                    f.write(f"  {j+1}. `{r['id']}` | {r.get('case_title', '')}{match}\n")
                 
                 if not pre_match:
-                    f.write("  ⚠️ *1차 검색(Hybrid)에서 정답을 찾지 못했습니다.*\n")
+                    f.write("  ⚠️ *1차 검색에서 정답을 찾지 못했습니다.*\n")
                 elif log['recall_5'] == 0:
                     f.write("  ⚠️ *1차 검색에서는 찾았으나, 리랭커가 순위 밖으로 밀어냈습니다.*\n")
 
@@ -297,6 +270,5 @@ class FTCOfficialEvaluator:
         self.retriever.close()
 
 if __name__ == "__main__":
-    # [설정] 현재 폴더에 있는 eval_data.json으로 평가 진행
     evaluator = FTCOfficialEvaluator("eval_data.json")
     evaluator.run_evaluation()
